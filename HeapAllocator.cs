@@ -50,7 +50,7 @@ public unsafe record struct HeapBlock(Memory<byte> Span, nint UnallocatedStart)
 
     public ref byte BlockEnd => ref Unsafe.AddByteOffset(ref StartPtr, Span.Length);
 
-    public long AllocatedSize => UnallocatedStartPtr - StartPtr;
+    public long AllocatedSize => Unsafe.ByteOffset(ref UnallocatedStartPtr, ref StartPtr);
 }
 
 public class HeapAllocator
