@@ -23,10 +23,17 @@ using System.Runtime.CompilerServices;
 
 namespace Pixeval.Caching;
 
-public readonly unsafe struct MemoryMappedFileAllocator(MemoryMappedFileMemoryManager manager) : INativeAllocator
+public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager manager) : INativeAllocator
 {
+    private bool _cacheFileInitialized;
+
     public IResult<nint, AllocatorError> Allocate(nint size)
     {
+        if (_cacheFileInitialized)
+        {
+            return manager.DelegatedCombinedBumpPointerAllocator.Allocate(size);
+        }
+
         if (size % sizeof(long) != 0)
         {
             return new IResult<nint, AllocatorError>.Err(AllocatorError.UnalignedAllocation);
@@ -38,9 +45,17 @@ public readonly unsafe struct MemoryMappedFileAllocator(MemoryMappedFileMemoryMa
         var handle = mmf.CreateViewAccessor().SafeMemoryMappedViewHandle;
         byte* ptr = null;
         handle.AcquirePointer(ref ptr);
-        manager.Handles.Add(handle);
+
+        if (ptr == null)
+        {
+            return IResult<IntPtr, AllocatorError>.Err0(AllocatorError.MMapFailedWithNullPointer);
+        }
+
+        manager.Handles[new IntPtr(ptr)] = handle;
         manager.Filenames.Add(fileName);
-        return IResult<nint, AllocatorError>.Ok0((nint) ptr);
+        manager.BumpPointerAllocators.Add(new BumpPointerNativeAllocator(ref Unsafe.AsRef<byte>(ptr), size));
+        _cacheFileInitialized = true;
+        return manager.DelegatedCombinedBumpPointerAllocator.Allocate(size);
     }
 
     // Avoid using this ! The Unsafe.InitBlockUnaligned causes the entire file 
@@ -50,29 +65,18 @@ public readonly unsafe struct MemoryMappedFileAllocator(MemoryMappedFileMemoryMa
         return Allocate(size).IfOk(intPtr => Unsafe.InitBlockUnaligned((void*) intPtr, 0, (uint) size));
     }
 
-    public IResult<Void, AllocatorError> Free(nint ptr)
+    public IResult<Void, AllocatorError> Free(nint ptr, nint _)
     {
-        var handle = manager.Handles.FirstOrDefault(handle =>
-        {
-            byte* pPtr = null;
-            handle.AcquirePointer(ref pPtr);
-            if (pPtr == (byte*) ptr)
-            {
-                handle.ReleasePointer();
-                return true;
-            }
+        var keyValuePair = manager.Handles.FirstOrDefault(pair => pair.Key == ptr);
 
-            handle.ReleasePointer();
-            return false;
-        });
-
-        if (handle == default)
+        if (keyValuePair.Value == default)
         {
             return IResult<Void, AllocatorError>.Err0(AllocatorError.ReadFailed);
         }
 
-        handle.ReleasePointer();
-        handle.Dispose();
+        keyValuePair.Value.ReleasePointer();
+        keyValuePair.Value.Dispose();
+        manager.Handles.Remove(ptr);
         return IResult<Void, AllocatorError>.Ok0(Void.Value);
     }
 }

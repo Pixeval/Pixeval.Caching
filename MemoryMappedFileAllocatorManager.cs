@@ -22,27 +22,42 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Pixeval.Caching;
 
-public class MemoryMappedFileMemoryManager(string directory) : IDisposable
+public class MemoryMappedFileMemoryManager : IDisposable
 {
-    public string Directory => directory;
+    public string Directory => _directory;
 
-    public List<SafeMemoryMappedViewHandle> Handles = [];
+    public Dictionary<nint, SafeMemoryMappedViewHandle> Handles = [];
 
     public List<string> Filenames = [];
+    private readonly string _directory;
+
+    public MemoryMappedFileMemoryManager(string directory)
+    {
+        _directory = directory;
+        DelegatedCombinedBumpPointerAllocator = new DelegatedMultipleAllocator(BumpPointerAllocators);
+    }
 
     public INativeAllocator Allocator => new MemoryMappedFileAllocator(this);
 
+    public INativeAllocator DelegatedCombinedBumpPointerAllocator { get; }
+
+    public List<INativeAllocator> BumpPointerAllocators { get; } = [];
+
     public void Dispose()
     {
-        foreach (var se in Filenames.Select(f => Path.Combine(directory, f)))
+        foreach (var se in Filenames.Select(f => Path.Combine(_directory, f)))
         {
             File.Delete(se);
         }
 
-        Handles.ForEach(h =>
+        foreach (var (ptr, handle) in Handles)
         {
-            h.ReleasePointer();
-            h.Dispose();
-        });
+            if (ptr != 0)
+            {
+                handle.ReleasePointer();
+                handle.Dispose();
+            }
+        }
+        GC.SuppressFinalize(this);
     }
 }

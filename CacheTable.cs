@@ -2,7 +2,7 @@
 // GPL v3 License
 // 
 // Pixeval.Caching/Pixeval.Caching
-// Copyright (c) 2024 Pixeval.Caching/INativeAllocator.cs
+// Copyright (c) 2024 Pixeval.Caching/CacheTable.cs
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,20 +20,7 @@
 
 namespace Pixeval.Caching;
 
-/// <summary>
-/// All these three functions in the INativeAllocator must be fail-safe, that is, if the result is an error,
-/// the function must recover the internal state of the allocator back to the state before the function was called.
-/// </summary>
-public interface INativeAllocator
+public class CacheTable
 {
-    IResult<nint, AllocatorError> Allocate(nint size);
-
-    IResult<nint, AllocatorError> AllocateZeroed(nint size);
-
-    /// <summary>
-    /// It's implementers' responsibility to check whether the ptr is within the managed boundary of this allocator.
-    /// </summary>
-    /// <param name="ptr"></param>
-    /// <returns></returns>
-    IResult<Void, AllocatorError> Free(nint ptr, nint size);
+    
 }

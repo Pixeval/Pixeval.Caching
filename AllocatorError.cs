@@ -28,5 +28,7 @@ public enum AllocatorError
     SizeMismatch,
     ReadFailed,
     FailedToAllocateNewRegion,
-    UnalignedAllocation
+    UnalignedAllocation,
+    AggregateError,
+    MMapFailedWithNullPointer
 }

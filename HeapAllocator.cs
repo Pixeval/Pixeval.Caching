@@ -26,9 +26,9 @@ public unsafe record struct HeapBlock(Memory<byte> Span, nint UnallocatedStart)
 {
     public int Size => Span.Length;
 
-    public ref byte StartPtr => ref Unsafe.AsRef<byte>((byte*)Span.Pin().Pointer);
+    public ref byte StartPtr => ref Unsafe.AsRef<byte>((byte*) Span.Pin().Pointer);
 
-    public ref byte UnallocatedStartPtr => ref Unsafe.AsRef<byte>((byte*)UnallocatedStart);
+    public ref byte UnallocatedStartPtr => ref Unsafe.AsRef<byte>((byte*) UnallocatedStart);
 
     public bool RangeContains(ref byte ptr)
     {
