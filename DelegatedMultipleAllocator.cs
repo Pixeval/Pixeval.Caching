@@ -23,13 +23,13 @@ using System.Runtime.CompilerServices;
 
 namespace Pixeval.Caching;
 
-public unsafe class DelegatedMultipleAllocator(List<INativeAllocator> allocators) : INativeAllocator
+public unsafe class DelegatedMultipleAllocator(MemoryMappedFileMemoryManager manager, IEnumerable<HeapAllocator> allocators) : INativeAllocator
 {
     public IResult<IntPtr, AllocatorError> Allocate(nint size)
     {
         foreach (var nativeAllocator in allocators)
         {
-            if (nativeAllocator.Allocate(size) is IResult<nint, AllocatorError>.Ok ok)
+            if (nativeAllocator.Allocate(size, manager.Align) is IResult<nint, AllocatorError>.Ok ok)
             {
                 return ok;
             }
@@ -40,20 +40,5 @@ public unsafe class DelegatedMultipleAllocator(List<INativeAllocator> allocators
     public IResult<nint, AllocatorError> AllocateZeroed(nint size)
     {
         return Allocate(size).IfOk(intPtr => Unsafe.InitBlockUnaligned((void*) intPtr, 0, (uint)size));
-    }
-
-
-    public IResult<Void, AllocatorError> Free(nint ptr, nint size)
-    {
-        // Since it's implementers' job to insure the free is done correctly, the free should not be performed if the pointer is not within the
-        // managing range of current allocator, we just delegate the free to the first allocator that can free the pointer
-        foreach (var nativeAllocator in allocators)
-        {
-            if (nativeAllocator.Free(ptr, size) is IResult<Void, AllocatorError>.Ok ok)
-            {
-                return ok;
-            }
-        }
-        return IResult<Void, AllocatorError>.Err0(AllocatorError.AggregateError);
     }
 }

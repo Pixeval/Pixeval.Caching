@@ -23,24 +23,23 @@ using System.Runtime.CompilerServices;
 
 namespace Pixeval.Caching;
 
+// Manages all memory mapped files
 public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager manager) : INativeAllocator
 {
-    private bool _cacheFileInitialized;
 
     public IResult<nint, AllocatorError> Allocate(nint size)
     {
-        if (_cacheFileInitialized)
+        // TODO detect allocatablity
+
+        if (manager.DelegatedCombinedBumpPointerAllocator.Allocate(size) is IResult<nint, AllocatorError>.Ok ok)
         {
-            return manager.DelegatedCombinedBumpPointerAllocator.Allocate(size);
+            return ok;
         }
 
-        if (size % sizeof(long) != 0)
-        {
-            return new IResult<nint, AllocatorError>.Err(AllocatorError.UnalignedAllocation);
-        }
+        // If we must expand.
 
-        var fileName = Guid.NewGuid().ToString();
-        var mmf = MemoryMappedFile.CreateFromFile(Path.Combine(manager.Directory, fileName), FileMode.OpenOrCreate, null, size, MemoryMappedFileAccess.ReadWrite);
+        var fileName = Guid.NewGuid();
+        var mmf = MemoryMappedFile.CreateFromFile(Path.Combine(manager.Directory, fileName.ToString()), FileMode.OpenOrCreate, null, manager.DefaultMemoryMappedFileSize, MemoryMappedFileAccess.ReadWrite);
 
         var handle = mmf.CreateViewAccessor().SafeMemoryMappedViewHandle;
         byte* ptr = null;
@@ -51,10 +50,8 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
             return IResult<IntPtr, AllocatorError>.Err0(AllocatorError.MMapFailedWithNullPointer);
         }
 
-        manager.Handles[new IntPtr(ptr)] = handle;
-        manager.Filenames.Add(fileName);
-        manager.BumpPointerAllocators.Add(new BumpPointerNativeAllocator(ref Unsafe.AsRef<byte>(ptr), size));
-        _cacheFileInitialized = true;
+        manager.Handles.Add(new MemoryMappedFileCacheHandle(fileName, new IntPtr(ptr), handle));
+        manager.BumpPointerAllocators[fileName] = HeapAllocator.Create(new BumpPointerNativeAllocator(ref Unsafe.AsRef<byte>(ptr), manager.DefaultMemoryMappedFileSize));
         return manager.DelegatedCombinedBumpPointerAllocator.Allocate(size);
     }
 
@@ -65,18 +62,23 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
         return Allocate(size).IfOk(intPtr => Unsafe.InitBlockUnaligned((void*) intPtr, 0, (uint) size));
     }
 
-    public IResult<Void, AllocatorError> Free(nint ptr, nint _)
+    // this allows us to free one of the memory mapped files
+    public IResult<Void, AllocatorError> Free(nint ptr)
     {
-        var keyValuePair = manager.Handles.FirstOrDefault(pair => pair.Key == ptr);
+        var memoryMappedFileCacheHandle = manager.Handles.FirstOrDefault(cacheHandle => cacheHandle.Pointer == ptr);
 
-        if (keyValuePair.Value == default)
+        if (memoryMappedFileCacheHandle?.ViewHandle == default)
         {
             return IResult<Void, AllocatorError>.Err0(AllocatorError.ReadFailed);
         }
 
-        keyValuePair.Value.ReleasePointer();
-        keyValuePair.Value.Dispose();
-        manager.Handles.Remove(ptr);
+        memoryMappedFileCacheHandle.ViewHandle.ReleasePointer();
+        memoryMappedFileCacheHandle.ViewHandle.Dispose();
+        File.Delete(memoryMappedFileCacheHandle.Filename.ToString());
+
+        manager.Handles.Remove(memoryMappedFileCacheHandle);
+        manager.BumpPointerAllocators.Remove(memoryMappedFileCacheHandle.Filename);
+
         return IResult<Void, AllocatorError>.Ok0(Void.Value);
     }
 }

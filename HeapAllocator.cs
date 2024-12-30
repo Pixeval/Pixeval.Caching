@@ -22,7 +22,7 @@ using System.Runtime.CompilerServices;
 
 namespace Pixeval.Caching;
 
-public unsafe record struct HeapBlock(Memory<byte> Span, nint UnallocatedStart)
+public unsafe record HeapBlock(Memory<byte> Span, nint UnallocatedStart)
 {
     public int Size => Span.Length;
 
@@ -32,10 +32,10 @@ public unsafe record struct HeapBlock(Memory<byte> Span, nint UnallocatedStart)
 
     public bool RangeContains(ref byte ptr)
     {
-        ref var end = ref Unsafe.AddByteOffset(ref StartPtr, Span.Length);
-        return Unsafe.AreSame(ref end, ref ptr) ||
-               (Unsafe.IsAddressGreaterThan(ref ptr, ref StartPtr) &&
-                Unsafe.IsAddressLessThan(ref ptr, ref end));
+        var ptrRawPointer = (byte*) Unsafe.AsPointer(ref ptr);
+        var startRawPointer = (byte*) Unsafe.AsPointer(ref StartPtr);
+        var end = startRawPointer + Span.Length;
+        return ptrRawPointer >= startRawPointer && ptrRawPointer < end;
     }
 
     public long RelativeOffset<T>(ref byte ptr) where T : unmanaged
@@ -45,40 +45,45 @@ public unsafe record struct HeapBlock(Memory<byte> Span, nint UnallocatedStart)
 
     public ref T AbsoluteOffset<T>(nint offset) where T : unmanaged
     {
-        return ref Unsafe.AsRef<T>(Unsafe.AsPointer(ref Unsafe.AddByteOffset(ref StartPtr, offset)));
+        return ref Unsafe.AsRef<T>((byte*) Unsafe.AsPointer(ref StartPtr) + offset);
     }
 
-    public ref byte BlockEnd => ref Unsafe.AddByteOffset(ref StartPtr, Span.Length);
+    public ref byte BlockEnd => ref Unsafe.AsRef<byte>((byte*) Unsafe.AsPointer(ref StartPtr) + Span.Length);
 
     public long AllocatedSize => Unsafe.ByteOffset(ref UnallocatedStartPtr, ref StartPtr);
+    public nint UnallocatedStart { get; set; } = UnallocatedStart;
 }
 
-public class HeapAllocator
+public class HeapAllocator : IDisposable
 {
+    // 1mb, this will be doubled the first time the allocator allocates.
+    private nint _lastGrowthSize = 1 * 1024 * 1024;
+    private const double ExpandFactor = 2;
+
     private readonly LinkedList<HeapBlock> _commitedRegions;
     private readonly Action<HeapBlock>? _callbackOnExpansion;
     private bool _available;
+    // This is supposed to be a BumpPointerAllocator, the HeapAllocator runs as if it's allocating system memory.
     private readonly INativeAllocator _allocator;
 
     public nint Size { get; private set; }
 
     private HeapAllocator(
         nint size,
-        LinkedList<HeapBlock> commitedRegions,
         Action<HeapBlock>? callbackOnExpansion,
         bool available,
         INativeAllocator allocator)
     {
         Size = size;
-        _commitedRegions = commitedRegions;
         _callbackOnExpansion = callbackOnExpansion;
         _available = available;
         _allocator = allocator;
+        _commitedRegions = [];
     }
 
     public static HeapAllocator Create(INativeAllocator allocator, Action<HeapBlock>? callback = null)
     {
-        return new HeapAllocator(0, new LinkedList<HeapBlock>(), callback, true, allocator);
+        return new HeapAllocator(0, callback, true, allocator);
     }
 
     public IResult<Void, AllocatorError> Expand(nint desiredSize, nint align)
@@ -90,14 +95,19 @@ public class HeapAllocator
 
         // dude it's not superb to use desiredSize here, but we're not making a gc...
         // for the same reason we omit the expand factor.
-        var newBlockSize = MemoryHelper.RoundToNearestMultipleOf(desiredSize, align);
+        _lastGrowthSize = MemoryHelper.RoundToNearestMultipleOf((nint) (_lastGrowthSize * ExpandFactor), align);
 
-        switch (_allocator.Allocate(newBlockSize))
+        if (_lastGrowthSize <= desiredSize)
+        {
+            _lastGrowthSize = MemoryHelper.RoundToNearestMultipleOf((nint) (desiredSize * ExpandFactor), align);
+        }
+
+        switch (_allocator.Allocate(_lastGrowthSize))
         {
             case IResult<nint, AllocatorError>.Ok(var intPtr):
-                var region = new HeapBlock(new UnmanagedMemoryManager<byte>(intPtr, (int) newBlockSize).Memory, intPtr);
+                var region = new HeapBlock(new UnmanagedMemoryManager<byte>(intPtr, (int) _lastGrowthSize).Memory, intPtr);
                 _commitedRegions.AddLast(region);
-                Size += newBlockSize;
+                Size += _lastGrowthSize;
                 _callbackOnExpansion?.Invoke(region);
                 break;
             case IResult<nint, AllocatorError>.Err(var allocatorError):
@@ -114,17 +124,20 @@ public class HeapAllocator
             return IResult<nint, AllocatorError>.Err0(AllocatorError.AllocatorClosed);
         }
 
-        var tracker = _commitedRegions.FirstOrDefault(entry => entry.AllocatedSize + size <= entry.Size);
+        var sizeAligned = MemoryHelper.RoundToNearestMultipleOf(size, align);
+        var tracker = _commitedRegions.FirstOrDefault(entry => entry.AllocatedSize + sizeAligned <= entry.Size);
         if (tracker != default)
         {
             var padding = MemoryHelper.RoundToNearestMultipleOf(tracker.UnallocatedStart, align);
-            tracker.UnallocatedStart += padding;
+            tracker.UnallocatedStart = padding;
             var ptr = tracker.UnallocatedStart;
-            tracker.UnallocatedStart += size;
+            Console.WriteLine(tracker.UnallocatedStart);
+            tracker.UnallocatedStart += sizeAligned;
+            Console.WriteLine(tracker.UnallocatedStart);
             return IResult<nint, AllocatorError>.Ok0(ptr);
         }
 
-        if (Expand(size, align) is IResult<Void, AllocatorError>.Err err)
+        if (Expand(sizeAligned, align) is IResult<Void, AllocatorError>.Err err)
         {
             return err.Cast<Void, nint, AllocatorError>();
         }
@@ -149,13 +162,8 @@ public class HeapAllocator
         return !_available ? 0 : _commitedRegions.Select(block => block.AllocatedSize).Sum();
     }
 
-    public void Free()
+    public void Dispose()
     {
-        foreach (var commitedRegion in _commitedRegions)
-        {
-            _allocator.Free(commitedRegion.StartPtr);
-        }
-
-        _available = false;
+        _available = true;
     }
 }

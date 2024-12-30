@@ -29,11 +29,4 @@ public interface INativeAllocator
     IResult<nint, AllocatorError> Allocate(nint size);
 
     IResult<nint, AllocatorError> AllocateZeroed(nint size);
-
-    /// <summary>
-    /// It's implementers' responsibility to check whether the ptr is within the managed boundary of this allocator.
-    /// </summary>
-    /// <param name="ptr"></param>
-    /// <returns></returns>
-    IResult<Void, AllocatorError> Free(nint ptr, nint size);
 }

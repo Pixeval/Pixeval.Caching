@@ -27,26 +27,22 @@ public unsafe class BumpPointerNativeAllocator(ref byte ptrStart, nint heapSize)
 {
     public nint BumpingPointer { get; private set; } = new(Unsafe.AsPointer(ref ptrStart));
 
+    private readonly byte* _endPointer = (byte*) Unsafe.AsPointer(ref ptrStart) + heapSize;
+
     public IResult<nint, AllocatorError> Allocate(nint size)
     {
-        ref var ptr = ref Unsafe.AsRef<byte>((void*) BumpingPointer);
-        var newAddress = Unsafe.AddByteOffset(ref ptr, heapSize);
-        if (newAddress > size)
+        ref var ptr = ref Unsafe.AsRef<byte>((byte*) BumpingPointer);
+        var newAddress = (byte*) BumpingPointer + size;
+        if (newAddress >= _endPointer)
         {
             return IResult<IntPtr, AllocatorError>.Err0(AllocatorError.OutOfMemory);
         }
-        BumpingPointer = newAddress;
-        return IResult<IntPtr, AllocatorError>.Ok0(ptr);
+        BumpingPointer = new IntPtr(newAddress);
+        return IResult<IntPtr, AllocatorError>.Ok0(new IntPtr(Unsafe.AsPointer(ref ptr)));
     }
 
     public IResult<nint, AllocatorError> AllocateZeroed(nint size)
     {
         return Allocate(size).IfOk(ni => Unsafe.InitBlockUnaligned((void*) ni, 0, (uint) size));
-    }
-
-    public IResult<Void, AllocatorError> Free(nint ptr, nint size)
-    {
-        // Bumping pointer allocator does not free pointers, it's done be the allocator
-        throw new NotImplementedException();
     }
 }

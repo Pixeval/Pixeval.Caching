@@ -1,5 +1,7 @@
 ﻿using Pixeval.Caching;
 
-var manager = new MemoryMappedFileMemoryManager("D:\\mmaptest");
-var heapAllocator = HeapAllocator.Create(manager.DominantAllocator);
-var ptr = heapAllocator.Allocate(2000000000, 4);
+var manager = new MemoryMappedFileMemoryManager("D:\\mmaptest", 4);
+var ptr = manager.DominantAllocator.Allocate(2047);
+var ptr2 = manager.DominantAllocator.Allocate(2048);
+Console.WriteLine(ptr);
+Console.WriteLine(ptr2);

@@ -22,36 +22,42 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Pixeval.Caching;
 
+public record MemoryMappedFileCacheHandle(Guid Filename, nint Pointer, SafeMemoryMappedViewHandle ViewHandle);
+
 public class MemoryMappedFileMemoryManager : IDisposable
 {
-    public string Directory => _directory;
+    public string Directory { get; }
 
-    public Dictionary<nint, SafeMemoryMappedViewHandle> Handles = [];
+    public nint Align { get; }
 
-    public List<string> Filenames = [];
-    private readonly string _directory;
+    // Default memory mapped file size is 100MB
+    public nint DefaultMemoryMappedFileSize { get; set; } = 100 * 1024 * 1024;
 
-    public MemoryMappedFileMemoryManager(string directory)
+    public List<MemoryMappedFileCacheHandle> Handles = [];
+
+    public MemoryMappedFileMemoryManager(string directory, nint align)
     {
-        _directory = directory;
-        DelegatedCombinedBumpPointerAllocator = new DelegatedMultipleAllocator(BumpPointerAllocators);
+        Directory = directory;
+        Align = align;
+        DelegatedCombinedBumpPointerAllocator = new DelegatedMultipleAllocator(this, BumpPointerAllocators.Values);
     }
 
     public INativeAllocator DominantAllocator => new MemoryMappedFileAllocator(this);
 
     public INativeAllocator DelegatedCombinedBumpPointerAllocator { get; }
 
-    public List<INativeAllocator> BumpPointerAllocators { get; } = [];
+    public Dictionary<Guid, HeapAllocator> BumpPointerAllocators { get; } = [];
 
     public void Dispose()
     {
-        foreach (var se in Filenames.Select(f => Path.Combine(_directory, f)))
+        foreach (var se in Handles.Select(f => Path.Combine(Directory, f.Filename.ToString())))
         {
             File.Delete(se);
         }
 
-        foreach (var (ptr, handle) in Handles)
+        foreach (var (filename, ptr, handle) in Handles)
         {
+            File.Delete(filename.ToString());
             if (ptr != 0)
             {
                 handle.ReleasePointer();
