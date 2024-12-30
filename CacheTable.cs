@@ -20,7 +20,12 @@
 
 namespace Pixeval.Caching;
 
-public class CacheTable
+public class CacheTable(MemoryMappedFileMemoryManager memoryManager)
 {
-    
+    public MemoryMappedFileMemoryManager MemoryManager { get; } = memoryManager;
+
+    public void Allocate()
+    {
+
+    }
 }

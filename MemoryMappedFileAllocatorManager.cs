@@ -37,7 +37,7 @@ public class MemoryMappedFileMemoryManager : IDisposable
         DelegatedCombinedBumpPointerAllocator = new DelegatedMultipleAllocator(BumpPointerAllocators);
     }
 
-    public INativeAllocator Allocator => new MemoryMappedFileAllocator(this);
+    public INativeAllocator DominantAllocator => new MemoryMappedFileAllocator(this);
 
     public INativeAllocator DelegatedCombinedBumpPointerAllocator { get; }
 

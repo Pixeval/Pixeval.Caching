@@ -22,9 +22,7 @@ using System.Runtime.CompilerServices;
 
 namespace Pixeval.Caching;
 
-/// <summary>
-/// The name of this class may sound weird, but it actually refers to a "managed heap of native memory", yes :)
-/// </summary>
+
 public unsafe class BumpPointerNativeAllocator(ref byte ptrStart, nint heapSize) : INativeAllocator
 {
     public nint BumpingPointer { get; private set; } = new(Unsafe.AsPointer(ref ptrStart));
@@ -46,7 +44,7 @@ public unsafe class BumpPointerNativeAllocator(ref byte ptrStart, nint heapSize)
         return Allocate(size).IfOk(ni => Unsafe.InitBlockUnaligned((void*) ni, 0, (uint) size));
     }
 
-    public IResult<Void, AllocatorError> Free(nint ptr)
+    public IResult<Void, AllocatorError> Free(nint ptr, nint size)
     {
         // Bumping pointer allocator does not free pointers, it's done be the allocator
         throw new NotImplementedException();
