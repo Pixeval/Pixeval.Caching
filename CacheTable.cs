@@ -18,7 +18,9 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endregion
 
+using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Pixeval.Caching;
 
@@ -31,9 +33,47 @@ public class CacheTable<TKey, THeader, TProtocol>(MemoryMappedFileMemoryManager 
 
     private readonly Dictionary<TKey, (nint ptr, int allocatedLength)> _cacheTable = [];
 
-    private readonly PriorityQueue<TKey, int> _lruCacheIndex = new();
+    private PriorityQueue<TKey, int> _lruCacheIndex = new();
+
+    // ReSharper disable once InconsistentNaming
+    public int CacheLRUFactor { get; set; } = 2;
 
     private TProtocol _protocol = protocol;
+
+    /// <summary>
+    /// While calling this method, all cache operations should be halted.
+    /// </summary>
+    private unsafe void Compact()
+    {
+        var retain = _lruCacheIndex.Count / CacheLRUFactor;
+        var newPriorityQueue = new PriorityQueue<TKey, int>();
+        for (var i = 0; i < retain; i++)
+        {
+            _lruCacheIndex.TryDequeue(out var element, out var priority);
+            newPriorityQueue.Enqueue(element!, priority);
+        }
+
+        _lruCacheIndex = newPriorityQueue;
+
+        var garbage = new Dictionary<nint, int>();
+
+        foreach (var key in _lruCacheIndex.UnorderedItems.Select(x => x.Element))
+        {
+            if (TryReadCache(key, out var span))
+            {
+                var pointer = Unsafe.AsPointer(ref span.GetPinnableReference());
+                garbage[(nint) pointer] = span.Length;
+            }
+        }
+
+        var grouped = garbage.GroupBy(
+            tuple => MemoryManager.BumpPointerAllocators.First(pair => pair.Value.GetBlock((byte*) tuple.Key) != default).Value,
+            tuple => tuple);
+        foreach (var group in grouped)
+        {
+            group.Key.Compact(group.ToDictionary(tuple => tuple.Key, tuple => tuple.Value), garbage.Keys.ToHashSet());
+        }
+    }
 
     public unsafe AllocatorState TryCache(TKey key, Span<byte> span)
     {

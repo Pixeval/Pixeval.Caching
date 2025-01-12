@@ -23,11 +23,11 @@ using System.Runtime.InteropServices;
 
 namespace Pixeval.Caching;
 
-public unsafe record HeapBlock(Memory<byte> Span, nint UnallocatedStart)
+public unsafe record HeapBlock(Memory<byte> Memory, nint UnallocatedStart)
 {
-    public int Size => Span.Length;
+    public int Size => Memory.Length;
 
-    public ref byte StartPtr => ref Unsafe.AsRef<byte>((byte*) Span.Pin().Pointer);
+    public ref byte StartPtr => ref Unsafe.AsRef<byte>((byte*) Memory.Pin().Pointer);
 
     public ref byte UnallocatedStartPtr => ref Unsafe.AsRef<byte>((byte*) UnallocatedStart);
 
@@ -35,7 +35,7 @@ public unsafe record HeapBlock(Memory<byte> Span, nint UnallocatedStart)
     {
         var ptrRawPointer = (byte*) Unsafe.AsPointer(ref ptr);
         var startRawPointer = (byte*) Unsafe.AsPointer(ref StartPtr);
-        var end = startRawPointer + Span.Length;
+        var end = startRawPointer + Memory.Length;
         return ptrRawPointer >= startRawPointer && ptrRawPointer < end;
     }
 
@@ -49,9 +49,10 @@ public unsafe record HeapBlock(Memory<byte> Span, nint UnallocatedStart)
         return ref Unsafe.AsRef<T>((byte*) Unsafe.AsPointer(ref StartPtr) + offset);
     }
 
-    public ref byte BlockEnd => ref Unsafe.AsRef<byte>((byte*) Unsafe.AsPointer(ref StartPtr) + Span.Length);
+    public ref byte BlockEnd => ref Unsafe.AsRef<byte>((byte*) Unsafe.AsPointer(ref StartPtr) + Memory.Length);
 
     public long AllocatedSize => Unsafe.ByteOffset(ref UnallocatedStartPtr, ref StartPtr);
+
     public nint UnallocatedStart { get; set; } = UnallocatedStart;
 }
 
@@ -157,12 +158,37 @@ public class HeapAllocator : IDisposable
     public unsafe HeapBlock? GetBlock(byte* ptr)
     {
         var result = _commitedRegions.FirstOrDefault(block => block.RangeContains(ref Unsafe.AsRef<byte>(ptr)));
-        return result == default ? null : result;
+        return result;
     }
 
     public long Allocated()
     {
         return !_available ? 0 : _commitedRegions.Select(block => block.AllocatedSize).Sum();
+    }
+
+    public unsafe Dictionary<nint, nint> Compact(Dictionary<nint, int> pointersWithin, ISet<nint> garbage)
+    {
+        var grouped = pointersWithin.GroupBy(
+            tuple => GetBlock((byte*) tuple.Key),
+            tuple => tuple);
+        var resultDictionary = new Dictionary<nint, nint>();
+        foreach (var group in grouped.Where(grp => grp.Key != default))
+        {
+            var heapBlock = group.Key;
+            var span = heapBlock!.Memory.Span;
+            var currentIndex = 0;
+            foreach (var (pointer, allocatedSize) in group.Where(tuple => !garbage.Contains(tuple.Key)))
+            {
+                var oldContentSpan = new Span<byte>((void*) pointer, allocatedSize);
+                oldContentSpan.CopyTo(span[currentIndex..(currentIndex + allocatedSize)]);
+                resultDictionary[pointer] = heapBlock.UnallocatedStart + currentIndex;
+                currentIndex += allocatedSize;
+            }
+
+            heapBlock.UnallocatedStart = heapBlock.StartPtr + currentIndex;
+        }
+
+        return resultDictionary;
     }
 
     public void Dispose()

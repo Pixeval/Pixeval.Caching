@@ -127,6 +127,5 @@ public class Program
         queue.Enqueue("abs", 1);
         queue.Enqueue("bcd", 1);
         Console.WriteLine(queue.Dequeue());
-        ;
     }
 }
