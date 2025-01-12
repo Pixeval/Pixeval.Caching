@@ -19,6 +19,7 @@
 #endregion
 
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Pixeval.Caching;
 
@@ -86,15 +87,13 @@ public class HeapAllocator : IDisposable
         return new HeapAllocator(0, callback, true, allocator);
     }
 
-    public IResult<Void, AllocatorError> Expand(nint desiredSize, nint align)
+    public unsafe IResult<Void, AllocatorState> Expand(nint desiredSize, nint align)
     {
         if (!_available)
         {
-            return IResult<Void, AllocatorError>.Err0(AllocatorError.AllocatorClosed);
+            return IResult<Void, AllocatorState>.Err0(AllocatorState.AllocatorClosed);
         }
 
-        // dude it's not superb to use desiredSize here, but we're not making a gc...
-        // for the same reason we omit the expand factor.
         _lastGrowthSize = MemoryHelper.RoundToNearestMultipleOf((nint) (_lastGrowthSize * ExpandFactor), align);
 
         if (_lastGrowthSize <= desiredSize)
@@ -102,26 +101,32 @@ public class HeapAllocator : IDisposable
             _lastGrowthSize = MemoryHelper.RoundToNearestMultipleOf((nint) (desiredSize * ExpandFactor), align);
         }
 
-        switch (_allocator.Allocate(_lastGrowthSize))
+        var result = _allocator.TryAllocate(_lastGrowthSize, out var span);
+
+        switch (result)
         {
-            case IResult<nint, AllocatorError>.Ok(var intPtr):
-                var region = new HeapBlock(new UnmanagedMemoryManager<byte>(intPtr, (int) _lastGrowthSize).Memory, intPtr);
-                _commitedRegions.AddLast(region);
-                Size += _lastGrowthSize;
-                _callbackOnExpansion?.Invoke(region);
+            case AllocatorState.AllocationSuccess:
+                fixed (byte* elem = &MemoryMarshal.GetReference(span))
+                {
+                    var region = new HeapBlock(new UnmanagedMemoryManager<byte>(span).Memory, new IntPtr(elem));
+                    _commitedRegions.AddLast(region);
+                    Size += _lastGrowthSize;
+                    _callbackOnExpansion?.Invoke(region);
+                }
+                
                 break;
-            case IResult<nint, AllocatorError>.Err(var allocatorError):
-                return IResult<Void, AllocatorError>.Err0(allocatorError);
+            case var _:
+                return IResult<Void, AllocatorState>.Err0(result);
         }
 
-        return IResult<Void, AllocatorError>.Ok0(Void.Value);
+        return IResult<Void, AllocatorState>.Ok0(Void.Value);
     }
 
-    public IResult<nint, AllocatorError> Allocate(nint size, nint align)
+    public IResult<(nint ptr, nint actualSize), AllocatorState> Allocate(nint size, nint align)
     {
         if (!_available)
         {
-            return IResult<nint, AllocatorError>.Err0(AllocatorError.AllocatorClosed);
+            return IResult<(nint ptr, nint actualSize), AllocatorState>.Err0(AllocatorState.AllocatorClosed);
         }
 
         var sizeAligned = MemoryHelper.RoundToNearestMultipleOf(size, align);
@@ -131,15 +136,13 @@ public class HeapAllocator : IDisposable
             var padding = MemoryHelper.RoundToNearestMultipleOf(tracker.UnallocatedStart, align);
             tracker.UnallocatedStart = padding;
             var ptr = tracker.UnallocatedStart;
-            Console.WriteLine(tracker.UnallocatedStart);
             tracker.UnallocatedStart += sizeAligned;
-            Console.WriteLine(tracker.UnallocatedStart);
-            return IResult<nint, AllocatorError>.Ok0(ptr);
+            return IResult<(nint, nint), AllocatorState>.Ok0((ptr, sizeAligned));
         }
 
-        if (Expand(sizeAligned, align) is IResult<Void, AllocatorError>.Err err)
+        if (Expand(sizeAligned, align) is IResult<Void, AllocatorState>.Err err)
         {
-            return err.Cast<Void, nint, AllocatorError>();
+            return err.Cast<Void, (nint ptr, nint actualSize), AllocatorState>();
         }
 
         return Allocate(size, align);

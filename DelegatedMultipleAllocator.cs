@@ -25,20 +25,26 @@ namespace Pixeval.Caching;
 
 public unsafe class DelegatedMultipleAllocator(MemoryMappedFileMemoryManager manager, IEnumerable<HeapAllocator> allocators) : INativeAllocator
 {
-    public IResult<IntPtr, AllocatorError> Allocate(nint size)
+    public AllocatorState TryAllocate(nint size, out Span<byte> span)
     {
         foreach (var nativeAllocator in allocators)
         {
-            if (nativeAllocator.Allocate(size, manager.Align) is IResult<nint, AllocatorError>.Ok ok)
+            if (nativeAllocator.Allocate(size, manager.Align) is IResult<(nint ptr, nint actualSize), AllocatorState>.Ok(var (ptr, actualSize)))
             {
-                return ok;
+                span = new Span<byte>((byte*) ptr, (int) actualSize);
+                return AllocatorState.AllocationSuccess;
             }
         }
-        return IResult<IntPtr, AllocatorError>.Err0(AllocatorError.AggregateError);
+
+        span = [];
+        return AllocatorState.AggregateError;
     }
 
-    public IResult<nint, AllocatorError> AllocateZeroed(nint size)
+    public AllocatorState TryAllocateZeroed(nint size, out Span<byte> span)
     {
-        return Allocate(size).IfOk(intPtr => Unsafe.InitBlockUnaligned((void*) intPtr, 0, (uint)size));
+        var result = TryAllocate(size, out var s);
+        s.Clear();
+        span = s;
+        return result;
     }
 }

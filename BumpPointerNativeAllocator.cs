@@ -29,20 +29,25 @@ public unsafe class BumpPointerNativeAllocator(ref byte ptrStart, nint heapSize)
 
     private readonly byte* _endPointer = (byte*) Unsafe.AsPointer(ref ptrStart) + heapSize;
 
-    public IResult<nint, AllocatorError> Allocate(nint size)
+    public AllocatorState TryAllocate(nint size, out Span<byte> span)
     {
         ref var ptr = ref Unsafe.AsRef<byte>((byte*) BumpingPointer);
         var newAddress = (byte*) BumpingPointer + size;
         if (newAddress >= _endPointer)
         {
-            return IResult<IntPtr, AllocatorError>.Err0(AllocatorError.OutOfMemory);
+            span = [];
+            return AllocatorState.OutOfMemory;
         }
         BumpingPointer = new IntPtr(newAddress);
-        return IResult<IntPtr, AllocatorError>.Ok0(new IntPtr(Unsafe.AsPointer(ref ptr)));
+        span = new Span<byte>(Unsafe.AsPointer(ref ptr), (int) size);
+        return AllocatorState.AllocationSuccess;
     }
 
-    public IResult<nint, AllocatorError> AllocateZeroed(nint size)
+    public AllocatorState TryAllocateZeroed(nint size, out Span<byte> span)
     {
-        return Allocate(size).IfOk(ni => Unsafe.InitBlockUnaligned((void*) ni, 0, (uint) size));
+        var result = TryAllocate(size, out var s);
+        s.Clear();
+        span = s;
+        return result;
     }
 }

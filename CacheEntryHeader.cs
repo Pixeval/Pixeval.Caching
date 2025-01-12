@@ -2,7 +2,7 @@
 // GPL v3 License
 // 
 // Pixeval.Caching/Pixeval.Caching
-// Copyright (c) 2024 Pixeval.Caching/INativeAllocator.cs
+// Copyright (c) 2024 Pixeval.Caching/CacheEntryHeader.cs
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,15 +18,12 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endregion
 
+using System.Runtime.InteropServices;
+
 namespace Pixeval.Caching;
 
-/// <summary>
-/// All these three functions in the INativeAllocator must be fail-safe, that is, if the result is an error,
-/// the function must recover the internal state of the allocator back to the state before the function was called.
-/// </summary>
-public interface INativeAllocator
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+public struct CacheEntryHeader
 {
-    AllocatorState TryAllocate(nint size, out Span<byte> span);
-
-    AllocatorState TryAllocateZeroed(nint size, out Span<byte> span);
+    public int Length { get; set; }
 }

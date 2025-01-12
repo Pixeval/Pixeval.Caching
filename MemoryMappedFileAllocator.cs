@@ -27,13 +27,14 @@ namespace Pixeval.Caching;
 public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager manager) : INativeAllocator
 {
 
-    public IResult<nint, AllocatorError> Allocate(nint size)
+    public AllocatorState TryAllocate(nint size, out Span<byte> span)
     {
         // TODO detect allocatablity
 
-        if (manager.DelegatedCombinedBumpPointerAllocator.Allocate(size) is IResult<nint, AllocatorError>.Ok ok)
+        if (manager.DelegatedCombinedBumpPointerAllocator.TryAllocate(size, out var s) is AllocatorState.AllocationSuccess)
         {
-            return ok;
+            span = s;
+            return AllocatorState.AllocationSuccess;
         }
 
         // If we must expand.
@@ -47,29 +48,43 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
 
         if (ptr == null)
         {
-            return IResult<IntPtr, AllocatorError>.Err0(AllocatorError.MMapFailedWithNullPointer);
+            span = [];
+            return AllocatorState.MMapFailedWithNullPointer;
         }
 
         manager.Handles.Add(new MemoryMappedFileCacheHandle(fileName, new IntPtr(ptr), handle));
         manager.BumpPointerAllocators[fileName] = HeapAllocator.Create(new BumpPointerNativeAllocator(ref Unsafe.AsRef<byte>(ptr), manager.DefaultMemoryMappedFileSize));
-        return manager.DelegatedCombinedBumpPointerAllocator.Allocate(size);
+
+        var result = manager.DelegatedCombinedBumpPointerAllocator.TryAllocate(size, out var s2);
+        switch (result)
+        {
+            case AllocatorState.AllocationSuccess:
+                span = s2;
+                return AllocatorState.AllocationSuccess;
+            case var _:
+                span = [];
+                return result;
+        }
     }
 
     // Avoid using this ! The Unsafe.InitBlockUnaligned causes the entire file 
     // to be copied into RAM.
-    public IResult<nint, AllocatorError> AllocateZeroed(nint size)
+    public AllocatorState TryAllocateZeroed(nint size, out Span<byte> span)
     {
-        return Allocate(size).IfOk(intPtr => Unsafe.InitBlockUnaligned((void*) intPtr, 0, (uint) size));
+        var result = TryAllocate(size, out var s);
+        s.Clear();
+        span = s;
+        return AllocatorState.AllocationSuccess;
     }
 
     // this allows us to free one of the memory mapped files
-    public IResult<Void, AllocatorError> Free(nint ptr)
+    public IResult<Void, AllocatorState> Free(nint ptr)
     {
         var memoryMappedFileCacheHandle = manager.Handles.FirstOrDefault(cacheHandle => cacheHandle.Pointer == ptr);
 
         if (memoryMappedFileCacheHandle?.ViewHandle == default)
         {
-            return IResult<Void, AllocatorError>.Err0(AllocatorError.ReadFailed);
+            return IResult<Void, AllocatorState>.Err0(AllocatorState.ReadFailed);
         }
 
         memoryMappedFileCacheHandle.ViewHandle.ReleasePointer();
@@ -79,6 +94,6 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
         manager.Handles.Remove(memoryMappedFileCacheHandle);
         manager.BumpPointerAllocators.Remove(memoryMappedFileCacheHandle.Filename);
 
-        return IResult<Void, AllocatorError>.Ok0(Void.Value);
+        return IResult<Void, AllocatorState>.Ok0(Void.Value);
     }
 }

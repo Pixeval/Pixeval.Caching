@@ -20,8 +20,9 @@
 
 namespace Pixeval.Caching;
 
-public enum AllocatorError
+public enum AllocatorState
 {
+    AllocationSuccess,
     OutOfMemory,
     AllocatorClosed,
     PersistedCacheNotFound,

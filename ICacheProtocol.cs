@@ -2,7 +2,7 @@
 // GPL v3 License
 // 
 // Pixeval.Caching/Pixeval.Caching
-// Copyright (c) 2024 Pixeval.Caching/INativeAllocator.cs
+// Copyright (c) 2025 Pixeval.Caching/ICacheProtocol.cs
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,13 +20,15 @@
 
 namespace Pixeval.Caching;
 
-/// <summary>
-/// All these three functions in the INativeAllocator must be fail-safe, that is, if the result is an error,
-/// the function must recover the internal state of the allocator back to the state before the function was called.
-/// </summary>
-public interface INativeAllocator
+public interface ICacheProtocol<in TKey, THeader> where THeader : unmanaged
 {
-    AllocatorState TryAllocate(nint size, out Span<byte> span);
+    THeader GetHeader(TKey key);
 
-    AllocatorState TryAllocateZeroed(nint size, out Span<byte> span);
+    Span<byte> SerializeHeader(THeader header);
+
+    THeader DeserializeHeader(Span<byte> span);
+
+    static abstract int GetHeaderLength();
+
+    int GetDataLength(THeader header);
 }
