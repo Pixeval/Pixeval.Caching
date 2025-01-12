@@ -29,8 +29,6 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
 
     public AllocatorState TryAllocate(nint size, out Span<byte> span)
     {
-        // TODO detect allocatablity
-
         if (manager.DelegatedCombinedBumpPointerAllocator.TryAllocate(size, out var s) is AllocatorState.AllocationSuccess)
         {
             span = s;
@@ -39,8 +37,14 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
 
         // If we must expand.
 
+        if (manager.BumpPointerAllocators.Count >= manager.Token.MaxMemoryMappedFileCount)
+        {
+            span = [];
+            return AllocatorState.OutOfMemory;
+        }
+
         var fileName = Guid.NewGuid();
-        var mmf = MemoryMappedFile.CreateFromFile(Path.Combine(manager.Directory, fileName.ToString()), FileMode.OpenOrCreate, null, manager.DefaultMemoryMappedFileSize, MemoryMappedFileAccess.ReadWrite);
+        var mmf = MemoryMappedFile.CreateFromFile(Path.Combine(manager.Token.CacheDirectory, fileName.ToString()), FileMode.OpenOrCreate, null, manager.Token.MemoryMappedFileInitialSize, MemoryMappedFileAccess.ReadWrite);
 
         var handle = mmf.CreateViewAccessor().SafeMemoryMappedViewHandle;
         byte* ptr = null;
@@ -53,7 +57,7 @@ public unsafe class MemoryMappedFileAllocator(MemoryMappedFileMemoryManager mana
         }
 
         manager.Handles.Add(new MemoryMappedFileCacheHandle(fileName, new IntPtr(ptr), handle));
-        manager.BumpPointerAllocators[fileName] = HeapAllocator.Create(new BumpPointerNativeAllocator(ref Unsafe.AsRef<byte>(ptr), manager.DefaultMemoryMappedFileSize));
+        manager.BumpPointerAllocators[fileName] = HeapAllocator.Create(new BumpPointerNativeAllocator(ref Unsafe.AsRef<byte>(ptr), manager.Token.MemoryMappedFileInitialSize));
 
         var result = manager.DelegatedCombinedBumpPointerAllocator.TryAllocate(size, out var s2);
         switch (result)

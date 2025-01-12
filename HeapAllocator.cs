@@ -51,7 +51,7 @@ public unsafe record HeapBlock(Memory<byte> Memory, nint UnallocatedStart)
 
     public ref byte BlockEnd => ref Unsafe.AsRef<byte>((byte*) Unsafe.AsPointer(ref StartPtr) + Memory.Length);
 
-    public long AllocatedSize => Unsafe.ByteOffset(ref UnallocatedStartPtr, ref StartPtr);
+    public long AllocatedSize => Unsafe.ByteOffset(ref StartPtr, ref UnallocatedStartPtr);
 
     public nint UnallocatedStart { get; set; } = UnallocatedStart;
 }
@@ -176,16 +176,17 @@ public class HeapAllocator : IDisposable
         {
             var heapBlock = group.Key;
             var span = heapBlock!.Memory.Span;
-            var currentIndex = 0;
+            var currentUnallocatedStartOffset = 0;
             foreach (var (pointer, allocatedSize) in group.Where(tuple => !garbage.Contains(tuple.Key)))
             {
                 var oldContentSpan = new Span<byte>((void*) pointer, allocatedSize);
-                oldContentSpan.CopyTo(span[currentIndex..(currentIndex + allocatedSize)]);
-                resultDictionary[pointer] = heapBlock.UnallocatedStart + currentIndex;
-                currentIndex += allocatedSize;
+                // shift the memory block
+                oldContentSpan.CopyTo(span[currentUnallocatedStartOffset..(currentUnallocatedStartOffset + allocatedSize)]);
+                resultDictionary[pointer] = (nint) (((byte*) Unsafe.AsPointer(ref heapBlock.StartPtr)) + currentUnallocatedStartOffset);
+                currentUnallocatedStartOffset += allocatedSize;
             }
 
-            heapBlock.UnallocatedStart = heapBlock.StartPtr + currentIndex;
+            heapBlock.UnallocatedStart = (nint) Unsafe.AsPointer(ref heapBlock.StartPtr) + currentUnallocatedStartOffset;
         }
 
         return resultDictionary;

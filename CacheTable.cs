@@ -24,16 +24,18 @@ using System.Runtime.InteropServices;
 
 namespace Pixeval.Caching;
 
-public class CacheTable<TKey, THeader, TProtocol>(MemoryMappedFileMemoryManager memoryManager, TProtocol protocol) 
+public class CacheTable<TKey, THeader, TProtocol>( 
+    TProtocol protocol,
+    CacheToken token) 
     where THeader : unmanaged 
     where TKey : IEquatable<TKey>
     where TProtocol : ICacheProtocol<TKey, THeader>
 {
-    public MemoryMappedFileMemoryManager MemoryManager { get; } = memoryManager;
+    public MemoryMappedFileMemoryManager MemoryManager { get; } = new(token);
 
-    private readonly Dictionary<TKey, (nint ptr, int allocatedLength)> _cacheTable = [];
+    private Dictionary<TKey, (nint ptr, int allocatedLength)> _cacheTable = [];
 
-    private PriorityQueue<TKey, int> _lruCacheIndex = new();
+    private PriorityQueue<TKey, int> _lruCacheIndex = new(Comparer<int>.Create((x, y) => y.CompareTo(x)));
 
     // ReSharper disable once InconsistentNaming
     public int CacheLRUFactor { get; set; } = 2;
@@ -43,7 +45,7 @@ public class CacheTable<TKey, THeader, TProtocol>(MemoryMappedFileMemoryManager 
     /// <summary>
     /// While calling this method, all cache operations should be halted.
     /// </summary>
-    private unsafe void Compact()
+    private unsafe void PurgeCompact()
     {
         var retain = _lruCacheIndex.Count / CacheLRUFactor;
         var newPriorityQueue = new PriorityQueue<TKey, int>();
@@ -53,29 +55,41 @@ public class CacheTable<TKey, THeader, TProtocol>(MemoryMappedFileMemoryManager 
             newPriorityQueue.Enqueue(element!, priority);
         }
 
-        _lruCacheIndex = newPriorityQueue;
-
         var garbage = new Dictionary<nint, int>();
 
         foreach (var key in _lruCacheIndex.UnorderedItems.Select(x => x.Element))
         {
-            if (TryReadCache(key, out var span))
+            if (TryReadCache0(key, out var span, true))
             {
-                var pointer = Unsafe.AsPointer(ref span.GetPinnableReference());
+                var pointer = (byte*) Unsafe.AsPointer(ref MemoryMarshal.GetReference(span)) - TProtocol.GetHeaderLength();
                 garbage[(nint) pointer] = span.Length;
             }
         }
 
-        var grouped = garbage.GroupBy(
+        var grouped = _cacheTable.Values.ToDictionary().GroupBy(
             tuple => MemoryManager.BumpPointerAllocators.First(pair => pair.Value.GetBlock((byte*) tuple.Key) != default).Value,
             tuple => tuple);
         foreach (var group in grouped)
         {
-            group.Key.Compact(group.ToDictionary(tuple => tuple.Key, tuple => tuple.Value), garbage.Keys.ToHashSet());
+            var replacement = group.Key.Compact(group.ToDictionary(tuple => tuple.Key, tuple => tuple.Value), garbage.Keys.ToHashSet());
+            // forward reference
+            _cacheTable = _cacheTable.SelectMany(pair =>
+            {
+                return replacement.TryGetValue(pair.Value.ptr, out var newPointer)
+                    ? new[] { KeyValuePair.Create(pair.Key, (newPointer, pair.Value.allocatedLength)) } 
+                    : new[] { pair };
+            }).ToDictionary();
         }
+
+        _lruCacheIndex = newPriorityQueue;
     }
 
     public unsafe AllocatorState TryCache(TKey key, Span<byte> span)
+    {
+        return TryCache0(key, span, false);
+    }
+
+    private unsafe AllocatorState TryCache0(TKey key, Span<byte> span, bool collected)
     {
         if (_cacheTable.ContainsKey(key))
         {
@@ -89,14 +103,29 @@ public class CacheTable<TKey, THeader, TProtocol>(MemoryMappedFileMemoryManager 
         {
             header.CopyTo(cacheArea);
             span.CopyTo(cacheArea[header.Length..]);
-            _cacheTable[key] = ((nint) Unsafe.AsPointer(ref cacheArea.GetPinnableReference()), cacheArea.Length);
+            _cacheTable[key] = ((nint)Unsafe.AsPointer(ref cacheArea.GetPinnableReference()), cacheArea.Length);
+
+            _lruCacheIndex.Enqueue(key, 0);
             return AllocatorState.AllocationSuccess;
+        }
+
+        if (result is AllocatorState.OutOfMemory)
+        {
+            if (collected) return result;
+            PurgeCompact();
+            // ReSharper disable once TailRecursiveCall
+            return TryCache0(key, span, true);
         }
 
         return result;
     }
 
-    public unsafe bool TryReadCache(TKey key, out Span<byte> span)
+    public bool TryReadCache(TKey key, out Span<byte> span)
+    {
+        return TryReadCache0(key, out span, false);
+    }
+
+    private unsafe bool TryReadCache0(TKey key, out Span<byte> span, bool transparent)
     {
         if (_cacheTable.TryGetValue(key, out var tuple))
         {
@@ -107,8 +136,11 @@ public class CacheTable<TKey, THeader, TProtocol>(MemoryMappedFileMemoryManager 
             var totalSpan = new Span<byte>((void*) tuple.ptr, tuple.allocatedLength);
             span = totalSpan[headerLength..(headerLength + dataLength)];
 
-            _lruCacheIndex.Remove(key, out _, out var oldPriority);
-            _lruCacheIndex.Enqueue(key, oldPriority + 1);
+            if (!transparent)
+            {
+                _lruCacheIndex.Remove(key, out _, out var oldPriority);
+                _lruCacheIndex.Enqueue(key, oldPriority + 1);
+            }
 
             return true;
         }

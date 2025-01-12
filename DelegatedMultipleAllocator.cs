@@ -29,7 +29,7 @@ public unsafe class DelegatedMultipleAllocator(MemoryMappedFileMemoryManager man
     {
         foreach (var nativeAllocator in allocators)
         {
-            if (nativeAllocator.Allocate(size, manager.Align) is IResult<(nint ptr, nint actualSize), AllocatorState>.Ok(var (ptr, actualSize)))
+            if (nativeAllocator.Allocate(size, manager.Token.Align) is IResult<(nint ptr, nint actualSize), AllocatorState>.Ok(var (ptr, actualSize)))
             {
                 span = new Span<byte>((byte*) ptr, (int) actualSize);
                 return AllocatorState.AllocationSuccess;

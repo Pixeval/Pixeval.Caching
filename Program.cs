@@ -8,9 +8,8 @@ public class CacheKey : IEquatable<CacheKey>
 {
     public string Key { get; set; }
 
-    public int Length { get; set; }
-
     public int DataLength { get; set; }
+
     public bool Equals(CacheKey? other)
     {
         if (other is null)
@@ -53,13 +52,13 @@ public class CacheKey : IEquatable<CacheKey>
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public record struct CacheHeader(int Length, int DataLength);
+public record struct CacheHeader(int DataLength);
 
 public class CacheProtocol : ICacheProtocol<CacheKey, CacheHeader>
 {
     public CacheHeader GetHeader(CacheKey key)
     {
-        return new CacheHeader(key.Length, key.DataLength);
+        return new CacheHeader(key.DataLength);
     }
 
     public Span<byte> SerializeHeader(CacheHeader header)
@@ -70,7 +69,7 @@ public class CacheProtocol : ICacheProtocol<CacheKey, CacheHeader>
     public unsafe CacheHeader DeserializeHeader(Span<byte> span)
     {
         var ptr = (int*) Unsafe.AsPointer(ref span.GetPinnableReference());
-        return new CacheHeader(*ptr, *(++ptr));
+        return new CacheHeader(*ptr);
     }
 
     public static unsafe int GetHeaderLength()
@@ -107,25 +106,15 @@ public class Program
         span.Fill(15);
         var cacheKey = new CacheKey()
         {
-            DataLength = 1024,
+            DataLength = span.Length,
             Key = "test",
-            Length = 512
         };
-        cacheTable.TryCache(new CacheKey()
-        {
-            DataLength = 1024,
-            Key = "test",
-            Length = 512
-        }, span);
+        cacheTable.TryCache(cacheKey, span);
 
         if (cacheTable.TryReadCache(cacheKey, out var readSpan))
         {
             Console.WriteLine("Cache read success");
         }*/
-
-        var queue = new PriorityQueue<string, int>();
-        queue.Enqueue("abs", 1);
-        queue.Enqueue("bcd", 1);
-        Console.WriteLine(queue.Dequeue());
+        Test.CacheTest();
     }
 }

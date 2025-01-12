@@ -26,19 +26,13 @@ public record MemoryMappedFileCacheHandle(Guid Filename, nint Pointer, SafeMemor
 
 public class MemoryMappedFileMemoryManager : IDisposable
 {
-    public string Directory { get; }
-
-    public nint Align { get; }
-
-    // Default memory mapped file size is 100MB
-    public nint DefaultMemoryMappedFileSize { get; set; } = 100 * 1024 * 1024;
+    public CacheToken Token { get; }
 
     public List<MemoryMappedFileCacheHandle> Handles = [];
 
-    public MemoryMappedFileMemoryManager(string directory, nint align)
+    public MemoryMappedFileMemoryManager(CacheToken token)
     {
-        Directory = directory;
-        Align = align;
+        Token = token;
         DelegatedCombinedBumpPointerAllocator = new DelegatedMultipleAllocator(this, BumpPointerAllocators.Values);
     }
 
@@ -46,11 +40,14 @@ public class MemoryMappedFileMemoryManager : IDisposable
 
     public INativeAllocator DelegatedCombinedBumpPointerAllocator { get; }
 
+    /// <summary>
+    /// Each BumpPointerAllocator is responsible for a single mmaped file
+    /// </summary>
     public Dictionary<Guid, HeapAllocator> BumpPointerAllocators { get; } = [];
 
     public void Dispose()
     {
-        foreach (var se in Handles.Select(f => Path.Combine(Directory, f.Filename.ToString())))
+        foreach (var se in Handles.Select(f => Path.Combine(Token.CacheDirectory, f.Filename.ToString())))
         {
             File.Delete(se);
         }
